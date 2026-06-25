@@ -94,8 +94,14 @@ def build_metadata(
     transcript = _read_transcript(srt_path)
 
     # En anlamlı kısa başlık metni (hashtagsiz).
-    headline = _first_sentence(caption) or src_title or _first_sentence(transcript)
-    headline = re.sub(r"#\w+", "", headline).strip(" -|·–")
+    # Çok parçalı/highlight kliplerde (part set) parça başına transkript fragmanı
+    # başlık için KÖTÜ (hızlı spiker anlatımı ASR'de bozuk çıkar). O durumda
+    # caption / kaynak başlığını tercih et, transkripte düşme.
+    if part is not None:
+        headline = _first_sentence(caption) or src_title
+    else:
+        headline = _first_sentence(caption) or src_title or _first_sentence(transcript)
+    headline = re.sub(r"#\w+", "", headline or "").strip(" -|·–")
     headline = _oneline(headline)
 
     base = label.strip()
