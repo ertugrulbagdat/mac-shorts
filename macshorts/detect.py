@@ -66,88 +66,56 @@ def detect_highlights(
     src: Path,
     count: int,
     *,
-    min_len: float = 4.0,
-    max_len: float = 28.0,
-    scene_threshold: float = 0.35,
+    min_len: float = 6.0,
+    pre: float = 8.0,
+    post: float = 12.0,
+    skip_intro: float = 12.0,
+    skip_outro: float = 8.0,
+    baseline_s: float = 20.0,
+    scene_threshold: float = 0.35,   # geriye dönük uyum için tutulur; kullanılmaz
 ) -> list[Moment]:
-    """Özet videodan en enerjik N parçayı seç.
+    """Özet videodan gol/heyecan anlarını seç.
 
-    Mantık: sahne kesimleri videoyu doğal parçalara (atak/gol) böler;
-    her parçanın ortalama ses enerjisi onu sıralar; en yüksek N parça seçilir.
+    Gol imzası = ANİ ses zirvesi (spiker bağırması + tribün uğultusu). Düz intro
+    müziği ortalama enerjide yüksek ama "ani" değildir. Bu yüzden mutlak enerji
+    yerine YEREL ZEMİNE göre çıkıntı (prominence) kullanılır: golün ani çıkışı
+    hareketli ortalamanın üstüne fırlar, sabit intro müziği fırlamaz.
+
+    Ayrıca intro (ilk skip_intro sn) ve outro (son skip_outro sn) atlanır; her
+    zirvenin etrafından gol + kutlama için bir pencere alınır (pre/post).
     """
     duration = media_duration(src)
-    cuts = scene_cuts(src, scene_threshold)
-    boundaries = [0.0, *[c for c in cuts if 0 < c < duration], duration]
-    boundaries = sorted(set(boundaries))
-
     samples, sr = extract_pcm(src)
-    env, win_s = _rms_envelope(samples, sr)
+    env, win_s = _rms_envelope(samples, sr, win_s=0.5)
+    if len(env) == 0:
+        return []
 
-    def energy_between(a: float, b: float) -> tuple[float, float]:
-        i0 = int(a / win_s)
-        i1 = max(i0 + 1, int(b / win_s))
-        seg = env[i0:i1]
-        if len(seg) == 0:
-            return 0.0, a
-        peak_idx = i0 + int(np.argmax(seg))
-        return float(np.mean(seg)), peak_idx * win_s
+    # Yerel zemin (hareketli ortalama). Golün ani sıçraması bunun üstüne çıkar.
+    base_win = max(1, int(baseline_s / win_s))
+    kernel = np.ones(base_win) / base_win
+    baseline = np.convolve(env, kernel, mode="same")
+    prominence = np.clip(env - baseline, 0.0, None)
 
-    segments: list[Moment] = []
-    for a, b in zip(boundaries, boundaries[1:]):
-        seg_len = b - a
-        if seg_len < min_len:
-            continue
-        score, peak = energy_between(a, b)
-        # Çok uzun parçayı zirve etrafında kırp.
-        if seg_len > max_len:
-            start = max(a, peak - max_len * 0.35)
-            end = min(b, start + max_len)
-        else:
-            start, end = a, b
-        segments.append(Moment(start=start, end=end, peak=peak, score=score))
-
-    # Sahne kesimi hiç çıkmadıysa (tek parça video) ses zirvelerine düş.
-    if len(segments) <= 1:
-        return _peaks_fallback(env, win_s, duration, count, min_len, max_len)
-
-    segments.sort(key=lambda m: m.score, reverse=True)
-    chosen = _dedupe(segments, count)
-    chosen.sort(key=lambda m: m.start)
-    return chosen
-
-
-def _peaks_fallback(
-    env: np.ndarray, win_s: float, duration: float, count: int,
-    min_len: float, max_len: float,
-) -> list[Moment]:
-    """Sahne kesimi yoksa: en yüksek enerji zirvelerini al, etrafından kes."""
-    clip_len = min(max_len, max(min_len, 18.0))
-    order = np.argsort(env)[::-1]
+    min_gap = pre + post              # seçilen anlar örtüşmesin / aynı gol tekrar gelmesin
+    order = np.argsort(prominence)[::-1]
     chosen: list[Moment] = []
     used: list[float] = []
     for idx in order:
-        peak = idx * win_s
-        if any(abs(peak - u) < clip_len for u in used):
+        t = float(idx) * win_s
+        if t < skip_intro or t > duration - skip_outro:
+            continue                  # intro/outro'yu atla
+        if any(abs(t - u) < min_gap for u in used):
+            continue                  # önceki bir anla çakışıyor
+        start = max(0.0, t - pre)
+        end = min(duration, t + post)
+        if end - start < min_len:
             continue
-        start = max(0.0, peak - 6.0)
-        end = min(duration, start + clip_len)
-        chosen.append(Moment(start=start, end=end, peak=peak, score=float(env[idx])))
-        used.append(peak)
+        chosen.append(Moment(start=start, end=end, peak=t, score=float(prominence[idx])))
+        used.append(t)
         if len(chosen) >= count:
             break
+
     chosen.sort(key=lambda m: m.start)
-    return chosen
-
-
-def _dedupe(segments: list[Moment], count: int) -> list[Moment]:
-    """Birbirine çok yakın (örtüşen) anları ele, en iyi N'i döndür."""
-    chosen: list[Moment] = []
-    for m in segments:
-        if any(not (m.end <= c.start or m.start >= c.end) for c in chosen):
-            continue  # örtüşüyor
-        chosen.append(m)
-        if len(chosen) >= count:
-            break
     return chosen
 
 
