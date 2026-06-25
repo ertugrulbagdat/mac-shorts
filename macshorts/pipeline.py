@@ -66,11 +66,11 @@ def run(opts: Options) -> list[ClipResult]:
     work.mkdir(parents=True, exist_ok=True)
 
     print(f"[1/4] Kaynak alınıyor: {opts.source}")
-    src = download.fetch(opts.source, work / "_source")
+    src, source_meta = download.fetch(opts.source, work / "_source")
     print(f"      -> {src}")
 
     if opts.mode == "whole":
-        return _process_whole(src, work, opts)
+        return _process_whole(src, work, opts, source_meta)
 
     print(f"[2/4] Anlar tespit ediliyor (mod={opts.mode}) ...")
     moments = _detect(src, opts)
@@ -87,7 +87,7 @@ def run(opts: Options) -> list[ClipResult]:
         print(f"      [{i}/{len(moments)}] {res.file} "
               f"({res.duration:.1f}sn{', altyazılı' if res.subtitled else ''})")
 
-    _maybe_publish(results, opts)
+    _maybe_publish(results, opts, source_meta)
 
     print("[4/4] Manifest yazılıyor ...")
     _write_manifest(work, src, opts, results)
@@ -118,7 +118,9 @@ def _whole_segments(dur: float, short_len: float) -> list[tuple[float, float]]:
     return segs
 
 
-def _process_whole(src: Path, work: Path, opts: Options) -> list[ClipResult]:
+def _process_whole(
+    src: Path, work: Path, opts: Options, source_meta: dict | None = None,
+) -> list[ClipResult]:
     """whole modu: videoyu indir + altyazı ekle.
 
     Video <= short_len (varsayılan 60sn) ise tek parça (çerçeveye dokunulmaz).
@@ -146,7 +148,7 @@ def _process_whole(src: Path, work: Path, opts: Options) -> list[ClipResult]:
         print(f"      [{i}/{len(segments)}] {Path(res.file).name} "
               f"({res.duration:.1f}sn{', altyazılı' if res.subtitled else ''})")
 
-    _maybe_publish(results, opts)
+    _maybe_publish(results, opts, source_meta)
     _write_manifest(work, src, opts, results)
     print(f"\nBitti. {len(results)} video: {work}")
     print("UYARI: Yayınlamadan ÖNCE videoyu elle izle ve telif/kaynak "
@@ -209,12 +211,15 @@ def _whole_segment_clip(
     )
 
 
-def _maybe_publish(results: list[ClipResult], opts: Options) -> None:
+def _maybe_publish(
+    results: list[ClipResult], opts: Options, source_meta: dict | None = None,
+) -> None:
     """opts.publish ise her klibi YouTube'a (varsayılan private) yükle."""
     if not opts.publish or not results:
         return
     from . import publish as pub
 
+    multi = len(results) > 1
     print(f"\n[Yayın] {len(results)} video YouTube'a yükleniyor "
           f"(gizlilik={opts.privacy}) ...")
     if opts.privacy == "public":
@@ -224,6 +229,8 @@ def _maybe_publish(results: list[ClipResult], opts: Options) -> None:
             meta = pub.build_metadata(
                 label=opts.label,
                 srt_path=Path(r.srt) if r.srt else None,
+                source=source_meta,
+                part=(r.index if multi else None),
             )
             url = pub.upload(
                 Path(r.file), meta,

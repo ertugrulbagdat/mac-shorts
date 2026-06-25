@@ -40,44 +40,102 @@ def _read_transcript(srt_path: Path | None) -> str:
     return " ".join(lines).strip()
 
 
+def _oneline(text: str | None) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _clean(text: str | None) -> str:
+    """HTML kaçışlarını çöz, satır sonlarını sadeleştir, kenar boşluklarını al."""
+    import html
+
+    if not text:
+        return ""
+    text = html.unescape(text).replace("\r", "\n")
+    # 3+ ardışık satır sonunu 2'ye indir
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _first_sentence(text: str | None) -> str:
+    t = _oneline(text)
+    if not t:
+        return ""
+    m = re.split(r"(?<=[.!?])\s", t, maxsplit=1)
+    return (m[0] if m else t).strip()
+
+
+def _truncate(s: str, n: int) -> str:
+    s = s.strip()
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def _hashtags(text: str | None) -> list[str]:
+    return [h.lower() for h in re.findall(r"#(\w+)", text or "")]
+
+
 def build_metadata(
     *,
     label: str,
     srt_path: Path | None,
+    source: dict | None = None,
     extra_tags: list[str] | None = None,
+    part: int | None = None,
 ) -> dict:
-    """Transkriptten başlık/açıklama/etiket üret.
+    """Kaynak caption + transkript + etiketten anlamlı başlık/açıklama üret.
 
-    Title <= 100 karakter (YouTube sınırı). Açıklama transkript özeti + hashtag.
+    Öncelik sırası (başlık için): kaynak caption ilk cümlesi > kaynak başlığı >
+    transkript ilk cümlesi. Açıklama: caption (tam) + transkript özeti (varsa) +
+    kaynak künyesi + hashtag. Title <= 100 (YouTube sınırı).
     """
+    source = source or {}
+    caption = _clean(source.get("caption"))
+    src_title = _oneline(source.get("title"))
+    uploader = (source.get("uploader") or "").strip()
     transcript = _read_transcript(srt_path)
-    first = ""
-    if transcript:
-        # İlk cümle (nokta/ünlem/soru) ya da ilk ~70 karakter.
-        m = re.split(r"(?<=[.!?])\s", transcript, maxsplit=1)
-        first = m[0] if m else transcript
-        first = first[:70].strip()
 
-    base = label.strip() or "Short"
-    title = f"{base} | {first}" if first else base
-    title = title[:90].rstrip(" |")
+    # En anlamlı kısa başlık metni (hashtagsiz).
+    headline = _first_sentence(caption) or src_title or _first_sentence(transcript)
+    headline = re.sub(r"#\w+", "", headline).strip(" -|·–")
+    headline = _oneline(headline)
+
+    base = label.strip()
+    pieces = [p for p in (base, headline) if p and p.lower() != base.lower()]
+    if base and base not in pieces:
+        pieces.insert(0, base)
+    title = " | ".join(pieces) if pieces else (headline or "Short")
+    if part:
+        title = f"{title} (Bölüm {part})"
+    title = _truncate(title, 90)
     if "#shorts" not in title.lower() and len(title) <= 82:
         title = f"{title} #Shorts"
 
-    tags = ["shorts", "short"]
-    tags += [t.lower() for t in base.split() if len(t) > 2]
+    # Etiketler: caption hashtag'leri + etiket kelimeleri + kaynak etiketleri.
+    tag_pool = ["shorts", "short"]
+    tag_pool += _hashtags(caption)
+    tag_pool += [w.lower() for w in re.findall(r"\w+", base) if len(w) > 2]
+    tag_pool += [str(t).lower().replace(" ", "") for t in (source.get("tags") or [])]
     if extra_tags:
-        tags += [t.lower() for t in extra_tags]
-    # benzersiz + sınırlı
+        tag_pool += [t.lower() for t in extra_tags]
     seen: set[str] = set()
-    tags = [t for t in tags if not (t in seen or seen.add(t))][:15]
+    tags = [t for t in tag_pool if t and not (t in seen or seen.add(t))][:15]
 
-    hashtags = " ".join(f"#{re.sub(r'[^0-9a-zçğıöşü]', '', t.lower())}" for t in tags[:5] if t)
-    desc_parts = []
-    if transcript:
-        desc_parts.append(transcript[:300].strip())
-    desc_parts.append(hashtags)
-    description = "\n\n".join(p for p in desc_parts if p)
+    # Açıklama blokları.
+    blocks: list[str] = []
+    if caption:
+        blocks.append(_truncate(caption, 500))
+    elif transcript:
+        blocks.append(_truncate(transcript, 350))
+    # Konuşma transkripti caption'da yoksa ekle (ek bağlam).
+    if caption and transcript and _oneline(transcript)[:50].lower() not in caption.lower():
+        blocks.append("📝 " + _truncate(transcript, 220))
+    if uploader:
+        blocks.append(f"Kaynak: @{uploader}")
+    hashtag_line = " ".join(
+        f"#{re.sub(r'[^0-9a-zçğıöşü]', '', t)}" for t in tags[:6] if t
+    )
+    if hashtag_line:
+        blocks.append(hashtag_line)
+    description = "\n\n".join(b for b in blocks if b).strip()
 
     return {
         "title": title,
