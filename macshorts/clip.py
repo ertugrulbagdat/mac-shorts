@@ -20,6 +20,27 @@ VERTICAL_FILTER = (
 )
 
 
+def cut_segment(src: Path, start: float, duration: float, dst: Path) -> Path:
+    """[start, start+duration] aralığını en-boyu KORUYARAK kes (9:16'ya çevirmez)."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    run([
+        "ffmpeg",
+        "-v", "error",
+        "-y",
+        "-ss", f"{start:.3f}",
+        "-i", str(src),
+        "-t", f"{duration:.3f}",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "21",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(dst),
+    ])
+    return dst
+
+
 def cut_vertical(src: Path, start: float, duration: float, dst: Path) -> Path:
     """[start, start+duration] aralığını kesip 9:16 dikey klip üret."""
     dst.parent.mkdir(parents=True, exist_ok=True)

@@ -29,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="whole modunda tüm videoyu 9:16'ya kırp (varsayılan: orijinal en-boy).",
     )
     p.add_argument(
+        "--short-len", type=float, default=60.0,
+        help="whole modunda bu süreden (sn) uzun video parçalara bölünür "
+             "(varsayılan 60). Kısa videolar tek parça kalır.",
+    )
+    p.add_argument(
         "--count", type=int, default=5,
         help="highlights modunda üretilecek klip sayısı (varsayılan 5).",
     )
@@ -99,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         source=args.url or args.file,
         mode=args.mode,
         vertical=args.vertical,
+        short_len=args.short_len,
         count=args.count,
         minutes=args.minutes,
         out_dir=Path(args.out),

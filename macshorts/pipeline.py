@@ -44,6 +44,7 @@ class Options:
     mode: str = "highlights"          # highlights | match | whole
     count: int = 5
     vertical: bool = False            # whole modunda 9:16'ya zorla (varsayılan: orijinal en-boy)
+    short_len: float = 60.0           # whole modunda bu süreden uzun video parçalanır (sn)
     minutes: str | None = None        # match modu için "23,45+2"
     out_dir: Path = Path("output")
     subtitles: bool = True
@@ -96,33 +97,89 @@ def run(opts: Options) -> list[ClipResult]:
     return results
 
 
-def _process_whole(src: Path, work: Path, opts: Options) -> list[ClipResult]:
-    """whole modu: videoyu parçalamadan, sadece altyazı ekleyip sunar.
+def _whole_segments(dur: float, short_len: float) -> list[tuple[float, float]]:
+    """Videoyu Shorts'a uygun parçalara böl.
 
-    Çerçeveye dokunulmaz (reel zaten 9:16). --vertical verilirse tüm video
-    9:16'ya kırpılır.
+    dur <= short_len ise tek parça (tüm video). Aksi halde ardışık short_len'lik
+    parçalar; son parça kalan kadar. Çok kısa (< 3sn) son parça öncekine eklenir.
+    """
+    if dur <= short_len:
+        return [(0.0, dur)]
+    segs: list[tuple[float, float]] = []
+    t = 0.0
+    while t < dur - 0.1:
+        seg = min(short_len, dur - t)
+        segs.append((t, seg))
+        t += seg
+    if len(segs) >= 2 and segs[-1][1] < 3.0:
+        s0, d0 = segs[-2]
+        _, d1 = segs.pop()
+        segs[-1] = (s0, d0 + d1)
+    return segs
+
+
+def _process_whole(src: Path, work: Path, opts: Options) -> list[ClipResult]:
+    """whole modu: videoyu indir + altyazı ekle.
+
+    Video <= short_len (varsayılan 60sn) ise tek parça (çerçeveye dokunulmaz).
+    Daha uzunsa Shorts sınırına uyacak şekilde ardışık parçalara bölünür.
+    --vertical verilirse parça(lar) 9:16'ya kırpılır.
     """
     dur = media_duration(src)
-    base = work / "video"
+    segments = _whole_segments(dur, opts.short_len)
+    multi = len(segments) > 1
 
-    if opts.vertical:
-        print("[2/3] Tüm video 9:16'ya çevriliyor ...")
-        staged = base.with_suffix(".mp4")
-        clipper.cut_vertical(src, 0.0, dur, staged)
-        media = staged
+    if multi:
+        print(f"[2/3] Video {dur:.0f}sn > {opts.short_len:.0f}sn -> "
+              f"{len(segments)} parçaya bölünüyor ...")
     else:
-        media = src
+        print("[2/3] Video tek parça (≤ sınır), parçalanmıyor ...")
+    print(f"[3/3] Parça(lar) işleniyor"
+          f"{' + altyazı' if opts.subtitles else ''} ...")
+
+    results: list[ClipResult] = []
+    for i, (start, seg_dur) in enumerate(segments, start=1):
+        res = _whole_segment_clip(
+            src, start, seg_dur, i, work, opts, single=not multi, total_dur=dur,
+        )
+        results.append(res)
+        print(f"      [{i}/{len(segments)}] {Path(res.file).name} "
+              f"({res.duration:.1f}sn{', altyazılı' if res.subtitled else ''})")
+
+    _maybe_publish(results, opts)
+    _write_manifest(work, src, opts, results)
+    print(f"\nBitti. {len(results)} video: {work}")
+    print("UYARI: Yayınlamadan ÖNCE videoyu elle izle ve telif/kaynak "
+          "haklarını kabul ettiğini doğrula. Araç otomatik yayın YAPMAZ.")
+    return results
+
+
+def _whole_segment_clip(
+    src: Path, start: float, seg_dur: float, idx: int, work: Path,
+    opts: Options, *, single: bool, total_dur: float,
+) -> ClipResult:
+    """whole modunda tek bir parçayı hazırla (kes/kırp + altyazı)."""
+    name = "video" if single else f"clip-{idx:02d}"
+    base = work / name
+
+    if single and not opts.vertical:
+        media = src                      # tüm video, kırpma yok: kaynağı kullan
+    elif opts.vertical:
+        media = base.with_suffix(".mp4")
+        clipper.cut_vertical(src, start, seg_dur, media)
+    else:
+        media = base.with_suffix(".mp4")
+        clipper.cut_segment(src, start, seg_dur, media)
 
     final = media
     subtitled = False
     srt_out: str | None = None
 
     if opts.subtitles:
-        print("[3/3] Altyazı üretiliyor (tüm video) ...")
         srt_path = base.with_suffix(".srt")
         if subtitles.transcribe_to_srt(media, srt_path, opts.whisper_model, opts.lang):
             srt_out = str(srt_path)
-            burned = base.with_name("video-sub.mp4")
+            burned = base.with_name(f"{name}-sub.mp4")
             if subtitles.burn(
                 media, srt_path, burned,
                 font_size=opts.sub_size, margin_v=opts.sub_margin,
@@ -130,33 +187,26 @@ def _process_whole(src: Path, work: Path, opts: Options) -> list[ClipResult]:
                 final = burned
                 subtitled = True
 
-    # Hiç işlem olmadıysa (altyazısız + dikey değil), kaynağı çalışma
-    # klasörüne kopyala ki çıktı tek yerde toplansın.
+    # Hiç işlem olmadıysa (tek parça, altyazısız, dikey değil): kaynağı kopyala.
     if final == src:
         dst = base.with_suffix(".mp4")
         shutil.copy2(src, dst)
         final = dst
 
-    result = ClipResult(
-        index=1,
+    title = (f"{opts.label} — {_mmss(total_dur)}" if single
+             else f"{opts.label} #{idx} — {_mmss(start)}")
+    return ClipResult(
+        index=idx,
         file=str(final),
-        start=0.0,
-        end=round(dur, 2),
+        start=round(start, 2),
+        end=round(start + seg_dur, 2),
         peak=0.0,
-        duration=round(dur, 2),
+        duration=round(seg_dur, 2),
         score=0.0,
         subtitled=subtitled,
         srt=srt_out,
-        suggested_title=f"{opts.label} — {_mmss(dur)}",
+        suggested_title=title,
     )
-    print(f"      -> {result.file} ({result.duration:.1f}sn"
-          f"{', altyazılı' if subtitled else ''})")
-    _maybe_publish([result], opts)
-    _write_manifest(work, src, opts, [result])
-    print(f"\nBitti. 1 video: {work}")
-    print("UYARI: Yayınlamadan ÖNCE videoyu elle izle ve telif/kaynak "
-          "haklarını kabul ettiğini doğrula. Araç otomatik yayın YAPMAZ.")
-    return [result]
 
 
 def _maybe_publish(results: list[ClipResult], opts: Options) -> None:
