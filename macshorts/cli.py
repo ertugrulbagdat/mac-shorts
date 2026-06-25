@@ -14,8 +14,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="YouTube maç videosundan 9:16 Shorts klipleri üretir. "
                     "Otomatik YAYIN YAPMAZ; klipleri elle onaylarsın.",
     )
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--url", help="YouTube linki")
+    src = p.add_mutually_exclusive_group(required=False)
+    src.add_argument("--url", help="YouTube/Instagram linki")
     src.add_argument("--file", help="Yerel video dosyası (indirmeyi atlar)")
 
     p.add_argument(
@@ -73,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pub = p.add_argument_group("YouTube yayını (yarı-otomatik)")
     pub.add_argument(
+        "--login", action="store_true",
+        help="Tek seferlik YouTube OAuth girişi yap (tarayıcı açılır), token "
+             "kaydet ve çık. İNTERAKTİF terminalde çalıştır. URL gerekmez.",
+    )
+    pub.add_argument(
         "--publish", action="store_true",
         help="Üretilen videoları YouTube'a yükle (varsayılan PRIVATE). "
              "Başlık/açıklama otomatik üretilir; sen Studio'da yayınlarsın.",
@@ -94,6 +99,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Tek seferlik OAuth girişi: URL/dosya gerekmez.
+    if args.login:
+        from . import publish
+        try:
+            publish.login(Path(args.client_secret), Path(args.token))
+            return 0
+        except Exception as e:
+            print(f"Giriş hatası: {e}", file=sys.stderr)
+            return 1
+
+    if not (args.url or args.file):
+        print("Hata: --url veya --file gerekli (ya da tek seferlik giriş için --login).",
+              file=sys.stderr)
+        return 2
 
     if args.mode == "match" and not args.minutes:
         print("Hata: match modu için --minutes gerekli (örn: 23,45+2,67).",

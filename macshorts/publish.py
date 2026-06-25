@@ -118,6 +118,17 @@ def _get_credentials(client_secret: Path, token_path: Path):
     return creds
 
 
+def login(client_secret: Path, token_path: Path) -> None:
+    """Tek seferlik OAuth: tarayıcıda izin al, token'ı kaydet.
+
+    İNTERAKTİF terminalde çalıştırılmalı (tarayıcı açılır). Sonraki --publish
+    çalıştırmaları token'ı kullanır, tekrar giriş gerekmez.
+    """
+    _get_credentials(client_secret, token_path)
+    print(f"Giriş başarılı. Token kaydedildi: {token_path}")
+    print("Artık --publish ile yükleme yapabilirsin (tekrar giriş gerekmez).")
+
+
 def upload(
     video_path: Path,
     metadata: dict,
