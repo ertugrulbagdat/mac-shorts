@@ -5,3 +5,7 @@ __pycache__/
 *.mp4
 *.srt
 *.part
+# OAuth gizli dosyaları — ASLA commit'leme
+client_secret.json
+youtube_token.json
+*token*.json

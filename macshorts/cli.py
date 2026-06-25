@@ -19,9 +19,14 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--file", help="Yerel video dosyası (indirmeyi atlar)")
 
     p.add_argument(
-        "--mode", choices=["highlights", "match"], default="highlights",
+        "--mode", choices=["highlights", "match", "whole"], default="highlights",
         help="highlights: özet videoda otomatik sahne+ses tespiti. "
-             "match: tam maçta elle gol dakikaları (--minutes).",
+             "match: tam maçta elle gol dakikaları (--minutes). "
+             "whole: videoyu parçalamadan indir + altyazı ekle (reel için).",
+    )
+    p.add_argument(
+        "--vertical", action="store_true",
+        help="whole modunda tüm videoyu 9:16'ya kırp (varsayılan: orijinal en-boy).",
     )
     p.add_argument(
         "--count", type=int, default=5,
@@ -61,6 +66,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--label", default="klip",
         help="Önerilen başlık öneki (örn: 'Dünya Kupası gol').",
     )
+    pub = p.add_argument_group("YouTube yayını (yarı-otomatik)")
+    pub.add_argument(
+        "--publish", action="store_true",
+        help="Üretilen videoları YouTube'a yükle (varsayılan PRIVATE). "
+             "Başlık/açıklama otomatik üretilir; sen Studio'da yayınlarsın.",
+    )
+    pub.add_argument(
+        "--privacy", choices=["private", "unlisted", "public"], default="private",
+        help="Yükleme gizliliği (varsayılan private).",
+    )
+    pub.add_argument(
+        "--client-secret", default="client_secret.json",
+        help="Google OAuth client_secret.json yolu.",
+    )
+    pub.add_argument(
+        "--token", default="youtube_token.json",
+        help="OAuth token'ın saklanacağı/okunacağı yol.",
+    )
     return p
 
 
@@ -75,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     opts = Options(
         source=args.url or args.file,
         mode=args.mode,
+        vertical=args.vertical,
         count=args.count,
         minutes=args.minutes,
         out_dir=Path(args.out),
@@ -85,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         label=args.label,
         sub_size=args.sub_size,
         sub_margin=args.sub_margin,
+        publish=args.publish,
+        privacy=args.privacy,
+        client_secret=Path(args.client_secret),
+        token_path=Path(args.token),
     )
 
     try:

@@ -2,3 +2,6 @@ yt-dlp>=2024.0.0
 numpy>=1.24
 imageio-ffmpeg>=0.4.9
 faster-whisper>=1.0.0
+# Yalnızca --publish (YouTube yükleme) için gerekli:
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2

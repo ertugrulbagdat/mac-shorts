@@ -72,6 +72,40 @@ python -m macshorts --file mac.mp4 --no-subtitles
 | `--scene-threshold` | Sahne tespiti eşiği 0-1 (varsayılan 0.35) |
 | `--label` | Önerilen başlık öneki |
 
+## YouTube yayını (yarı-otomatik)
+
+Sistem videoyu **PRIVATE** yükler, başlık/açıklama/hashtag'i transkriptten
+otomatik üretir. Son "Yayınla" kararı sende kalır (YouTube Studio'da). Telif/spam
+güvenliği için public yayın varsayılan değildir.
+
+### Bir kerelik kurulum
+
+1. https://console.cloud.google.com → yeni proje oluştur.
+2. "APIs & Services → Library" → **YouTube Data API v3** → Enable.
+3. "APIs & Services → OAuth consent screen" → External → uygulama adı gir,
+   test kullanıcısı olarak kendi Google hesabını ekle.
+4. "Credentials → Create Credentials → OAuth client ID" → tip: **Desktop app**.
+5. İnen JSON'u proje köküne `client_secret.json` olarak koy.
+
+### Kullanım
+
+```bash
+# whole modu + private yükleme:
+python -m macshorts --url "https://instagram.com/p/..." --mode whole --vertical --publish --label "Dünya Kupası"
+```
+
+İlk `--publish` çalıştırmasında tarayıcı açılır, izin verirsin; token
+`youtube_token.json`'a kaydedilir (sonraki sefer giriş gerekmez).
+
+### Önemli sınırlar
+
+- **Yükleme kotası:** Varsayılan API kotası günde ~6 video. Daha fazlası için
+  Google'dan kota artışı iste.
+- **Doğrulanmamış uygulama:** App "testing" modundayken yüklenen videolar
+  PRIVATE'a kilitlenebilir; public yapmak için Studio'dan elle değiştir ya da
+  app doğrulaması yaptır.
+- `--privacy unlisted` / `--privacy public` ile gizlilik değişir (public riskli).
+
 ## Çıktı
 
 Her çalıştırma `output/run-<tarih>/` altına:
