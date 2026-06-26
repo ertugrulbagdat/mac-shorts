@@ -63,6 +63,7 @@ python -m macshorts --file mac.mp4 --no-subtitles
 |---|---|
 | `--url` / `--file` | Kaynak (biri zorunlu) |
 | `--mode` | `highlights` (özet) veya `match` (tam maç) |
+| `--smart-crop` | 9:16 kırpmada sabit merkez yerine aksiyonu (top/oyun) takip eden kayan pencere; hareket yoksa merkeze düşer |
 | `--count` | highlights modunda klip sayısı (varsayılan 5) |
 | `--minutes` | match modu gol dakikaları, örn `23,45+2,67` |
 | `--out` | Çıktı klasörü (varsayılan `output/`) |
@@ -113,6 +114,18 @@ Her çalıştırma `output/run-<tarih>/` altına:
 - `clip-NN.srt` — altyazı (yan dosya)
 - `manifest.json` — makine-okunur kayıt
 - `review.txt` — yayın öncesi insan kontrol listesi
+
+## Akıllı kırpma (aksiyon takibi)
+
+Varsayılan 9:16 kırpma sabit merkezdir; geniş maç planında top sık sık kadraj
+dışı kalır. `--smart-crop` ile araç klibin hareketini örnekler (kareler-arası
+fark → yatay aksiyon merkezi), yumuşatılmış-hız-sınırlı bir yörünge çıkarır ve
+pencereyi oyunun olduğu tarafa kaydırır. Ek bağımlılık gerektirmez (numpy +
+ffmpeg). Hareket sinyali zayıfsa otomatik olarak merkez kırpmaya düşer.
+
+```bash
+python -m macshorts --file mac.mp4 --mode highlights --smart-crop
+```
 
 ## Başlık önerisi
 

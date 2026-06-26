@@ -44,6 +44,7 @@ class Options:
     mode: str = "highlights"          # highlights | match | whole
     count: int = 5
     vertical: bool = False            # whole modunda 9:16'ya zorla (varsayılan: orijinal en-boy)
+    smart_crop: bool = False          # 9:16 kırpmada aksiyonu takip et (varsayılan: merkez)
     short_len: float = 60.0           # whole modunda bu süreden uzun video parçalanır (sn)
     minutes: str | None = None        # match modu için "23,45+2"
     out_dir: Path = Path("output")
@@ -170,7 +171,7 @@ def _whole_segment_clip(
         media = src                      # tüm video, kırpma yok: kaynağı kullan
     elif opts.vertical:
         media = base.with_suffix(".mp4")
-        clipper.cut_vertical(src, start, seg_dur, media)
+        clipper.cut_vertical(src, start, seg_dur, media, smart=opts.smart_crop)
     else:
         media = base.with_suffix(".mp4")
         clipper.cut_segment(src, start, seg_dur, media)
@@ -266,7 +267,7 @@ def _make_clip(
 ) -> ClipResult:
     base = work / f"clip-{idx:02d}"
     raw = base.with_suffix(".mp4")
-    clipper.cut_vertical(src, m.start, m.duration, raw)
+    clipper.cut_vertical(src, m.start, m.duration, raw, smart=opts.smart_crop)
 
     final = raw
     subtitled = False

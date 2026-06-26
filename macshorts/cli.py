@@ -29,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="whole modunda tüm videoyu 9:16'ya kırp (varsayılan: orijinal en-boy).",
     )
     p.add_argument(
+        "--smart-crop", action="store_true",
+        help="9:16 kırpmada sabit merkez yerine aksiyonu (top/oyun) takip eden "
+             "kayan pencere kullan. Hareket sinyali yoksa merkeze düşer.",
+    )
+    p.add_argument(
         "--short-len", type=float, default=60.0,
         help="whole modunda bu süreden (sn) uzun video parçalara bölünür "
              "(varsayılan 60). Kısa videolar tek parça kalır.",
@@ -124,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         source=args.url or args.file,
         mode=args.mode,
         vertical=args.vertical,
+        smart_crop=args.smart_crop,
         short_len=args.short_len,
         count=args.count,
         minutes=args.minutes,
