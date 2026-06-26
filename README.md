@@ -114,8 +114,15 @@ Her çalıştırma `output/run-<tarih>/` altına:
 - `manifest.json` — makine-okunur kayıt
 - `review.txt` — yayın öncesi insan kontrol listesi
 
+## Başlık önerisi
+
+`manifest.json` / `review.txt`'teki önerilen başlık ve `--publish` başlığı artık
+**aynı mantıkla** üretilir: önce klibin kendi transkriptinden en başlık-değeri
+yüksek (gol/ofsayt/penaltı/kurtarış... içeren, kalite kapısından geçen) cümle
+seçilir; her klibe ayırt edici bir başlık verir. Hızlı spiker anlatımı bozuk
+çıkarsa kaynak caption/başlığına düşer.
+
 ## Sınırlar (tasarım v1, bilinçli ertelenenler)
 
-- Merkez kırpma (topu takip eden akıllı kırpma ertelendi → tasarım Approach B).
 - Otomatik yapısal gol verisi yok (maç-saati ↔ video-zaman uyumsuzluğu nedeniyle).
 - Otomatik yayın yok (spam/telif riski nedeniyle bilinçli).

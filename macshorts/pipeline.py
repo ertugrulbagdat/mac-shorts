@@ -81,8 +81,9 @@ def run(opts: Options) -> list[ClipResult]:
 
     print(f"[3/4] Klipler kesiliyor (9:16){' + altyazı' if opts.subtitles else ''} ...")
     results: list[ClipResult] = []
+    multi = len(moments) > 1
     for i, m in enumerate(moments, start=1):
-        res = _make_clip(src, m, i, work, opts)
+        res = _make_clip(src, m, i, work, opts, source_meta, part=i if multi else None)
         results.append(res)
         print(f"      [{i}/{len(moments)}] {res.file} "
               f"({res.duration:.1f}sn{', altyazılı' if res.subtitled else ''})")
@@ -142,7 +143,8 @@ def _process_whole(
     results: list[ClipResult] = []
     for i, (start, seg_dur) in enumerate(segments, start=1):
         res = _whole_segment_clip(
-            src, start, seg_dur, i, work, opts, single=not multi, total_dur=dur,
+            src, start, seg_dur, i, work, opts, source_meta,
+            single=not multi, total_dur=dur,
         )
         results.append(res)
         print(f"      [{i}/{len(segments)}] {Path(res.file).name} "
@@ -158,7 +160,7 @@ def _process_whole(
 
 def _whole_segment_clip(
     src: Path, start: float, seg_dur: float, idx: int, work: Path,
-    opts: Options, *, single: bool, total_dur: float,
+    opts: Options, source_meta: dict | None = None, *, single: bool, total_dur: float,
 ) -> ClipResult:
     """whole modunda tek bir parçayı hazırla (kes/kırp + altyazı)."""
     name = "video" if single else f"clip-{idx:02d}"
@@ -195,8 +197,11 @@ def _whole_segment_clip(
         shutil.copy2(src, dst)
         final = dst
 
-    title = (f"{opts.label} — {_mmss(total_dur)}" if single
-             else f"{opts.label} #{idx} — {_mmss(start)}")
+    fallback = (f"{opts.label} — {_mmss(total_dur)}" if single
+                else f"{opts.label} #{idx} — {_mmss(start)}")
+    title = _suggested_title(
+        opts, srt_out, source_meta, part=None if single else idx, fallback=fallback,
+    )
     return ClipResult(
         index=idx,
         file=str(final),
@@ -255,7 +260,10 @@ def _detect(src: Path, opts: Options) -> list[Moment]:
     )
 
 
-def _make_clip(src: Path, m: Moment, idx: int, work: Path, opts: Options) -> ClipResult:
+def _make_clip(
+    src: Path, m: Moment, idx: int, work: Path, opts: Options,
+    source_meta: dict | None = None, *, part: int | None = None,
+) -> ClipResult:
     base = work / f"clip-{idx:02d}"
     raw = base.with_suffix(".mp4")
     clipper.cut_vertical(src, m.start, m.duration, raw)
@@ -275,7 +283,10 @@ def _make_clip(src: Path, m: Moment, idx: int, work: Path, opts: Options) -> Cli
                 final = burned
                 subtitled = True
 
-    title = f"{opts.label} #{idx} — {_mmss(m.peak)}"
+    title = _suggested_title(
+        opts, srt_out, source_meta, part=part,
+        fallback=f"{opts.label} #{idx} — {_mmss(m.peak)}",
+    )
     return ClipResult(
         index=idx,
         file=str(final),
@@ -288,6 +299,32 @@ def _make_clip(src: Path, m: Moment, idx: int, work: Path, opts: Options) -> Cli
         srt=srt_out,
         suggested_title=title,
     )
+
+
+def _suggested_title(
+    opts: Options, srt_out: str | None, source_meta: dict | None,
+    *, part: int | None, fallback: str,
+) -> str:
+    """Manifest için önerilen başlık — YAYINDA kullanılacakla AYNI mantık.
+
+    publish.build_metadata caption + klip transkriptinden anlamlı başlık üretir
+    (gol/ofsayt/... farkındalıklı). Böylece review.txt'te gördüğün başlık,
+    --publish ile yüklenecek başlıkla birebir aynı olur. Herhangi bir sorunda
+    eski 'label #idx — mm:ss' biçimine düşeriz.
+    """
+    try:
+        from . import publish as pub
+
+        meta = pub.build_metadata(
+            label=opts.label,
+            srt_path=Path(srt_out) if srt_out else None,
+            source=source_meta,
+            part=part,
+        )
+        title = (meta.get("title") or "").strip()
+        return title or fallback
+    except Exception:
+        return fallback
 
 
 def _mmss(sec: float) -> str:

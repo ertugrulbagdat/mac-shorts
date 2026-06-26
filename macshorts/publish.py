@@ -64,6 +64,98 @@ def _first_sentence(text: str | None) -> str:
     return (m[0] if m else t).strip()
 
 
+# Futbol olay kelimeleri (TR + EN). Bir cümlede geçiyorsa o cümle başlık için
+# çok daha değerli: izleyici "ne oldu"yu başlıkta görür. Kelime SINIRIYLA
+# eşleşir (aşağıda) — "gol" "golf"e, "post" "poster"a takılmasın diye. Türkçe'de
+# aşırı yaygın "var" (VAR hakemi) bilinçli DIŞARIDA: her cümlede eşleşirdi.
+_EVENT_KEYWORDS = (
+    "gol", "golü", "goal", "penaltı", "penalty", "ofsayt", "offside",
+    "kırmızı kart", "red card", "sent off", "kurtarış", "kurtardı", "kaleci",
+    "save", "saved", "saves", "keeper", "asist", "assist", "frikik", "free kick",
+    "korner", "corner", "kaçırdı", "missed", "crossbar", "direk",
+    "muhteşem", "harika", "incredible", "stunning", "brilliant",
+)
+_EVENT_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _EVENT_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _has_event(text: str) -> bool:
+    return bool(_EVENT_RE.search(text or ""))
+
+
+def _is_garbled(text: str) -> bool:
+    """ASR fragmanı başlık olamayacak kadar YAPISAL olarak bozuk mu?
+
+    Hızlı spiker anlatımı faster-whisper'da bazen anlamsız çıkar. Heuristik:
+    harf oranı düşükse, çok kısa "kelimeler" baskınsa ya da aynı harf üst üste
+    tekrarlıyorsa başlığa koymayız. Not: bu yapısal kontrol UZUNLUĞA bakmaz;
+    "Gol!" gibi kısa ama temiz olay cümlelerini eler düşürmemek için.
+    """
+    t = (text or "").strip()
+    if len(t) < 4:
+        return True
+    letters = sum(c.isalpha() for c in t)
+    if letters / max(len(t), 1) < 0.55:
+        return True
+    words = re.findall(r"\S+", t)
+    if not words:
+        return True
+    # Tek-iki harflik token'lar baskınsa (parçalı/bozuk ASR imzası)
+    tiny = sum(1 for w in words if len(re.sub(r"[^0-9a-zçğıöşü]", "", w.lower())) <= 2)
+    if tiny / len(words) > 0.5:
+        return True
+    # Aynı harfin 4+ kez ardışık tekrarı (ör. "aaaa", "lllll")
+    if re.search(r"(.)\1{3,}", t):
+        return True
+    return False
+
+
+def _score_sentence(s: str) -> float:
+    """Başlık adayı cümleyi puanla. Yüksek = daha iyi başlık."""
+    s = s.strip()
+    n = len(s)
+    if n == 0 or _is_garbled(s):
+        return -1.0
+    score = 0.0
+    has_event = _has_event(s)
+    if has_event:
+        score += 3.0          # "ne oldu" başlıkta: en değerli sinyal
+    if s.endswith("!"):
+        score += 1.0          # heyecanlı kapanış
+    # Uzunluk tatlı noktası: 18-75 karakter okunur bir başlık.
+    if 18 <= n <= 75:
+        score += 1.0
+    elif n < 12 and not has_event:
+        score -= 1.5          # kısa + olaysız = zayıf (ama "Gol!" cezalanmaz)
+    return score
+
+
+def _best_headline(text: str | None) -> str:
+    """Transkriptten en başlık-değeri yüksek cümleyi seç (kalite kapısından geçen).
+
+    Hiçbir cümle yeterince iyi/temiz değilse boş döner — çağıran caption/kaynak
+    başlığına düşer. Bu, eski "parça transkriptine hiç dokunma" davranışının
+    yerini alır: temizse kullan, bozuksa atla.
+    """
+    t = _oneline(text)
+    if not t:
+        return ""
+    sentences = [p.strip() for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]
+    if not sentences:
+        sentences = [t]
+    best, best_score = "", 0.0
+    for s in sentences:
+        sc = _score_sentence(s)
+        if sc > best_score:
+            best, best_score = s, sc
+    # Olay kelimesi yoksa (skor düşük) ama tek temiz cümle varsa onu kabul et.
+    if not best and not _is_garbled(sentences[0]):
+        best = _first_sentence(t)
+    return best.strip(" -|·–")
+
+
 def _truncate(s: str, n: int) -> str:
     s = s.strip()
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -94,13 +186,17 @@ def build_metadata(
     transcript = _read_transcript(srt_path)
 
     # En anlamlı kısa başlık metni (hashtagsiz).
-    # Çok parçalı/highlight kliplerde (part set) parça başına transkript fragmanı
-    # başlık için KÖTÜ (hızlı spiker anlatımı ASR'de bozuk çıkar). O durumda
-    # caption / kaynak başlığını tercih et, transkripte düşme.
+    # Önce klibin KENDİ transkriptinden en başlık-değeri yüksek (gol/ofsayt/...
+    # içeren, kalite kapısından geçen) cümleyi dene — her klibe ayırt edici bir
+    # başlık verir. Hızlı spiker anlatımı bozuksa _best_headline boş döner ve
+    # caption / kaynak başlığına düşeriz (eski "transkripte hiç dokunma"
+    # davranışı yerine: temizse kullan, bozuksa atla).
+    clip_headline = _best_headline(transcript)
     if part is not None:
-        headline = _first_sentence(caption) or src_title
+        # Çok parçalı klip: parça transkripti > caption ilk cümlesi > kaynak başlığı.
+        headline = clip_headline or _first_sentence(caption) or src_title
     else:
-        headline = _first_sentence(caption) or src_title or _first_sentence(transcript)
+        headline = clip_headline or _first_sentence(caption) or src_title or _first_sentence(transcript)
     headline = re.sub(r"#\w+", "", headline or "").strip(" -|·–")
     headline = _oneline(headline)
 
