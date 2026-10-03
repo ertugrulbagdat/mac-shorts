@@ -126,6 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
              "Başlık/açıklama otomatik üretilir; sen Studio'da yayınlarsın.",
     )
     pub.add_argument(
+        "--upload", action="store_true",
+        help="Kesim + çeviri bittikten sonra klipleri YouTube kanalına HER ZAMAN "
+             "gizli (private) yükle. client_secret.json ile OAuth; ilk seferde "
+             "tarayıcı açılır.",
+    )
+    pub.add_argument(
         "--privacy", choices=["private", "unlisted", "public"], default="private",
         help="Yükleme gizliliği (varsayılan private).",
     )
@@ -166,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Hata: --horizontal ve --vertical birlikte kullanılamaz.", file=sys.stderr)
         return 2
 
+    if args.upload and args.privacy != "private":
+        print("Hata: --upload yalnızca private yükler; --privacy ile birlikte "
+              "kullanma (unlisted/public için --publish --privacy).", file=sys.stderr)
+        return 2
+
     if args.mode == "match" and not args.minutes:
         print("Hata: match modu için --minutes gerekli (örn: 23,45+2,67).",
               file=sys.stderr)
@@ -195,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         translate_model=args.translate_model,
         translate_base_url=args.translate_base_url,
         publish=args.publish,
+        upload=args.upload,
         privacy=args.privacy,
         client_secret=Path(args.client_secret),
         token_path=Path(args.token),

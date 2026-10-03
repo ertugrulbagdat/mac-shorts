@@ -67,6 +67,7 @@ class Options:
     translate_model: str = translate_mod.DEFAULT_MODEL
     translate_base_url: str = translate_mod.DEFAULT_BASE_URL
     publish: bool = False             # YouTube'a yarı-otomatik yükleme
+    upload: bool = False              # --upload: klipleri YouTube'a HER ZAMAN private yükle
     privacy: str = "private"          # private | unlisted | public (varsayılan private)
     client_secret: Path = Path("client_secret.json")
     token_path: Path = Path("youtube_token.json")
@@ -306,35 +307,62 @@ def _apply_subtitles(media: Path, base: Path, opts: Options) -> _SubResult:
 def _maybe_publish(
     results: list[ClipResult], opts: Options, source_meta: dict | None = None,
 ) -> None:
-    """opts.publish ise her klibi YouTube'a (varsayılan private) yükle."""
-    if not opts.publish or not results:
+    """opts.publish/opts.upload ise her klibi YouTube'a yükle.
+
+    --upload gizliliği zorla 'private' yapar (opts.privacy yok sayılır).
+    """
+    if not (opts.publish or opts.upload) or not results:
         return
     from . import publish as pub
 
+    privacy = pub.PRIVATE if opts.upload else opts.privacy
     multi = len(results) > 1
     print(f"\n[Yayın] {len(results)} video YouTube'a yükleniyor "
-          f"(gizlilik={opts.privacy}) ...")
-    if opts.privacy == "public":
+          f"(gizlilik={privacy}) ...")
+    if privacy == "public":
         print("  UYARI: public seçtin. Telif/spam riskini kabul ettiğini varsayıyorum.")
     for r in results:
         try:
-            meta = pub.build_metadata(
-                label=opts.label,
-                srt_path=Path(r.srt) if r.srt else None,
-                source=source_meta,
-                part=(r.index if multi else None),
-            )
-            url = pub.upload(
-                Path(r.file), meta,
-                client_secret=opts.client_secret,
-                token_path=opts.token_path,
-                privacy=opts.privacy,
-            )
+            meta = _upload_metadata(r, opts, source_meta, part=(r.index if multi else None))
+            if opts.upload:
+                url = pub.upload_private(
+                    Path(r.file), meta,
+                    client_secret=opts.client_secret,
+                    token_path=opts.token_path,
+                )
+            else:
+                url = pub.upload(
+                    Path(r.file), meta,
+                    client_secret=opts.client_secret,
+                    token_path=opts.token_path,
+                    privacy=opts.privacy,
+                )
             r.youtube_url = url
             print(f"  #{r.index:02d} yüklendi -> {url}  (başlık: {meta['title']})")
         except Exception as e:
             print(f"  ! #{r.index:02d} yükleme başarısız: {str(e)[:300]}")
     print("  Not: videolar PRIVATE. YouTube Studio'da gözden geçirip elle yayınla.")
+
+
+def _upload_metadata(
+    r: ClipResult, opts: Options, source_meta: dict | None, *, part: int | None,
+) -> dict:
+    """Yükleme başlık/açıklaması: transkriptten üret; olmazsa dosya adına düş."""
+    from . import publish as pub
+
+    try:
+        meta = pub.build_metadata(
+            label=opts.label,
+            srt_path=Path(r.srt) if r.srt else None,
+            source=source_meta,
+            part=part,
+        )
+        if (meta.get("title") or "").strip():
+            return meta
+    except Exception:
+        pass
+    name = Path(r.file).stem
+    return {"title": name, "description": f"{name} — macshorts ile üretildi.", "tags": []}
 
 
 def _detect(src: Path, opts: Options) -> list[Moment]:

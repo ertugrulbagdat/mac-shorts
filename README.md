@@ -119,6 +119,9 @@ python -m macshorts --url "https://instagram.com/p/..." --mode whole --vertical 
   PRIVATE'a kilitlenebilir; public yapmak için Studio'dan elle değiştir ya da
   app doğrulaması yaptır.
 - `--privacy unlisted` / `--privacy public` ile gizlilik değişir (public riskli).
+- `--upload`: kesim + çeviri bittikten sonra klipleri **her zaman private** yükler;
+  `--privacy` ile birlikte verilemez. Başlık transkriptten üretilir, üretilemezse
+  dosya adı kullanılır.
 
 ## Çıktı
 

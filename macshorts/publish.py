@@ -21,6 +21,8 @@ from pathlib import Path
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 # YouTube kategori 17 = Sports. Spor dışı için 24 (Entertainment) makul varsayılan.
 DEFAULT_CATEGORY = "17"
+#: --upload yolunun tek gizlilik değeri; API isteğine sabit olarak yazılır.
+PRIVATE = "private"
 
 
 class PublishError(RuntimeError):
@@ -289,6 +291,30 @@ def login(client_secret: Path, token_path: Path) -> None:
     print("Artık --publish ile yükleme yapabilirsin (tekrar giriş gerekmez).")
 
 
+def video_body(metadata: dict, privacy: str = PRIVATE) -> dict:
+    """videos.insert istek gövdesi (snippet + status)."""
+    return {
+        "snippet": {
+            "title": metadata["title"],
+            "description": metadata["description"],
+            "tags": metadata.get("tags", []),
+            "categoryId": metadata.get("categoryId", DEFAULT_CATEGORY),
+        },
+        "status": {
+            "privacyStatus": privacy,          # varsayılan: private
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+
+def upload_private(
+    video_path: Path, metadata: dict, *, client_secret: Path, token_path: Path,
+) -> str:
+    """--upload yolu: gizlilik parametresi YOK, istek her zaman 'private' gider."""
+    return upload(video_path, metadata, client_secret=client_secret,
+                  token_path=token_path, privacy=PRIVATE)
+
+
 def upload(
     video_path: Path,
     metadata: dict,
@@ -310,18 +336,7 @@ def upload(
     creds = _get_credentials(client_secret, token_path)
     youtube = build("youtube", "v3", credentials=creds)
 
-    body = {
-        "snippet": {
-            "title": metadata["title"],
-            "description": metadata["description"],
-            "tags": metadata.get("tags", []),
-            "categoryId": metadata.get("categoryId", DEFAULT_CATEGORY),
-        },
-        "status": {
-            "privacyStatus": privacy,          # varsayılan: private
-            "selfDeclaredMadeForKids": False,
-        },
-    }
+    body = video_body(metadata, privacy)
     media = MediaFileUpload(str(video_path), chunksize=-1, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
 
