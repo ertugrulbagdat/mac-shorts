@@ -10,6 +10,9 @@ from pathlib import Path
 
 from .ffmpeg_tools import ytdlp_ffmpeg_dir
 
+#: yt-dlp'nin çerezleri okuyacağı tarayıcı (cookiesfrombrowser formatı).
+COOKIES_BROWSER = ("chrome",)
+
 
 def fetch(url_or_path: str, out_dir: Path) -> tuple[Path, dict]:
     """URL ise indir, yerel dosya ise olduğu gibi döndür.
@@ -63,10 +66,23 @@ def _download(url: str, out_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "progress_hooks": [hook],
+        # YouTube'un 403 Forbidden'ını aşmak için oturum açık tarayıcı çerezleri.
+        "cookiesfrombrowser": COOKIES_BROWSER,
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as e:
+        # Windows'ta Chrome çerezleri açık tarayıcıda kilitli / app-bound
+        # şifreli olabilir; çerez okunamazsa çerezsiz tekrar dene.
+        msg = str(e).lower()
+        if "cookie" not in msg and "dpapi" not in msg and "decrypt" not in msg:
+            raise
+        print(f"  ! Tarayıcı çerezleri okunamadı ({e}); çerezsiz deneniyor.")
+        opts.pop("cookiesfrombrowser")
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
 
     meta = _extract_meta(info)
 

@@ -6,6 +6,7 @@ Akış (tasarım dokümanı, Recommended Approach):
   3. Aday anları bul (özet: sahne+ses, tam maç: elle dakika + ses zirvesi)
   4. Her aday için 9:16 klip kes
   5. faster-whisper ile altyazı (varsayılan açık)
+  5b. SRT'yi NVIDIA NIM ile Türkçe'ye çevir (varsayılan açık), çevrilmiş SRT gömülür
   6. Manifest yaz; YAYINDAN ÖNCE ZORUNLU İNSAN KONTROLÜ
 Yayın YOK: araç sadece klip üretir, paylaşma kararı insanda.
 """
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from . import clip as clipper
 from . import detect, download, subtitles
+from . import translate as translate_mod  # Options.translate alanıyla çakışmasın
 from .detect import Moment
 from .ffmpeg_tools import media_duration
 
@@ -33,9 +35,11 @@ class ClipResult:
     duration: float
     score: float
     subtitled: bool
-    srt: str | None
+    srt: str | None                      # videoya gömülen SRT (çeviri açıksa Türkçe)
     suggested_title: str
     youtube_url: str | None = None
+    srt_source: str | None = None        # whisper'ın ürettiği ham (çevrilmemiş) SRT
+    translated: bool = False             # srt, srt_source'un çevirisi mi
 
 
 @dataclass
@@ -45,6 +49,8 @@ class Options:
     count: int = 5
     vertical: bool = False            # whole modunda 9:16'ya zorla (varsayılan: orijinal en-boy)
     smart_crop: bool = False          # 9:16 kırpmada aksiyonu takip et (varsayılan: merkez)
+    horizontal: bool = False          # highlights/match: 9:16 kırpma yok, orijinal en-boy
+    duration: float | None = None     # klip süresi (sn); None = mod varsayılanı (highlights 20)
     short_len: float = 60.0           # whole modunda bu süreden uzun video parçalanır (sn)
     minutes: str | None = None        # match modu için "23,45+2"
     out_dir: Path = Path("output")
@@ -55,16 +61,53 @@ class Options:
     label: str = "klip"               # önerilen başlık öneki
     sub_size: int = 12                # altyazı font boyutu (libass SRT tuvali); küçük sayı
     sub_margin: int = 45              # altyazı alt boşluğu; küçüldükçe daha aşağı
+    translate: bool = True            # SRT'yi NVIDIA NIM ile çevir (anahtar yoksa atlanır)
+    translate_from: str = "en"        # whisper SRT'sinin dili
+    translate_to: str = "tr"          # gömülecek altyazının dili
+    translate_model: str = translate_mod.DEFAULT_MODEL
+    translate_base_url: str = translate_mod.DEFAULT_BASE_URL
     publish: bool = False             # YouTube'a yarı-otomatik yükleme
     privacy: str = "private"          # private | unlisted | public (varsayılan private)
     client_secret: Path = Path("client_secret.json")
     token_path: Path = Path("youtube_token.json")
 
 
+def _sub_stage_label(opts: Options) -> str:
+    """İlerleme satırı için altyazı/çeviri aşama etiketi."""
+    if not opts.subtitles:
+        return ""
+    if opts.translate:
+        return f" + altyazı ({translate_mod.lang_name(opts.translate_to)} çeviri)"
+    return " + altyazı"
+
+
+def _check_translate_ready(opts: Options) -> None:
+    """Çeviri ön koşullarını hat başında BİR KEZ doğrula; eksikse çeviriyi kapat.
+
+    Böylece her klip için aynı uyarıyı basmayız ve manifest'te çevirinin
+    gerçekten çalışmadığı dürüstçe görünür.
+    """
+    if not (opts.subtitles and opts.translate):
+        return
+    try:
+        import openai  # noqa: F401
+    except ImportError:
+        print("  ! openai kurulu değil -> altyazı çevirisi kapatıldı "
+              "(`pip install openai`).")
+        opts.translate = False
+        return
+    if not translate_mod.has_api_key():
+        print(f"  ! {translate_mod.API_KEY_ENV[0]} ayarlı değil -> altyazı "
+              "çevirisi kapatıldı; whisper altyazısı olduğu gibi gömülecek.")
+        opts.translate = False
+
+
 def run(opts: Options) -> list[ClipResult]:
     out_dir = Path(opts.out_dir)
     work = out_dir / datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S")
     work.mkdir(parents=True, exist_ok=True)
+
+    _check_translate_ready(opts)
 
     print(f"[1/4] Kaynak alınıyor: {opts.source}")
     src, source_meta = download.fetch(opts.source, work / "_source")
@@ -80,7 +123,8 @@ def run(opts: Options) -> list[ClipResult]:
         return []
     print(f"      -> {len(moments)} aday an")
 
-    print(f"[3/4] Klipler kesiliyor (9:16){' + altyazı' if opts.subtitles else ''} ...")
+    fmt = "yatay" if opts.horizontal else "9:16"
+    print(f"[3/4] Klipler kesiliyor ({fmt}){_sub_stage_label(opts)} ...")
     results: list[ClipResult] = []
     multi = len(moments) > 1
     for i, m in enumerate(moments, start=1):
@@ -138,8 +182,7 @@ def _process_whole(
               f"{len(segments)} parçaya bölünüyor ...")
     else:
         print("[2/3] Video tek parça (≤ sınır), parçalanmıyor ...")
-    print(f"[3/3] Parça(lar) işleniyor"
-          f"{' + altyazı' if opts.subtitles else ''} ...")
+    print(f"[3/3] Parça(lar) işleniyor{_sub_stage_label(opts)} ...")
 
     results: list[ClipResult] = []
     for i, (start, seg_dur) in enumerate(segments, start=1):
@@ -176,21 +219,10 @@ def _whole_segment_clip(
         media = base.with_suffix(".mp4")
         clipper.cut_segment(src, start, seg_dur, media)
 
-    final = media
-    subtitled = False
-    srt_out: str | None = None
-
-    if opts.subtitles:
-        srt_path = base.with_suffix(".srt")
-        if subtitles.transcribe_to_srt(media, srt_path, opts.whisper_model, opts.lang):
-            srt_out = str(srt_path)
-            burned = base.with_name(f"{name}-sub.mp4")
-            if subtitles.burn(
-                media, srt_path, burned,
-                font_size=opts.sub_size, margin_v=opts.sub_margin,
-            ):
-                final = burned
-                subtitled = True
+    sub = _apply_subtitles(media, base, opts) if opts.subtitles else _SubResult(
+        final=media, subtitled=False,
+    )
+    final = sub.final
 
     # Hiç işlem olmadıysa (tek parça, altyazısız, dikey değil): kaynağı kopyala.
     if final == src:
@@ -201,7 +233,7 @@ def _whole_segment_clip(
     fallback = (f"{opts.label} — {_mmss(total_dur)}" if single
                 else f"{opts.label} #{idx} — {_mmss(start)}")
     title = _suggested_title(
-        opts, srt_out, source_meta, part=None if single else idx, fallback=fallback,
+        opts, sub.srt, source_meta, part=None if single else idx, fallback=fallback,
     )
     return ClipResult(
         index=idx,
@@ -211,9 +243,63 @@ def _whole_segment_clip(
         peak=0.0,
         duration=round(seg_dur, 2),
         score=0.0,
-        subtitled=subtitled,
-        srt=srt_out,
+        subtitled=sub.subtitled,
+        srt=sub.srt,
         suggested_title=title,
+        srt_source=sub.srt_source,
+        translated=sub.translated,
+    )
+
+
+@dataclass
+class _SubResult:
+    """_apply_subtitles çıktısı: gömülecek video + altyazı dosyaları."""
+
+    final: Path
+    subtitled: bool
+    srt: str | None = None               # gömülen SRT (çeviri başarılıysa Türkçe)
+    srt_source: str | None = None        # whisper'ın ham SRT'si
+    translated: bool = False
+
+
+def _apply_subtitles(media: Path, base: Path, opts: Options) -> _SubResult:
+    """Altyazı zinciri: whisper SRT -> (NVIDIA) çeviri -> ffmpeg ile gömme.
+
+    Her adım bağımsız olarak düşebilir: transkript olmazsa altyazı yok, çeviri
+    olmazsa whisper'ın İngilizce SRT'si gömülür, gömme olmazsa SRT yan dosya
+    olarak kalır. Hat hiçbir durumda çökmez.
+    """
+    srt_path = base.with_suffix(".srt")
+    if not subtitles.transcribe_to_srt(media, srt_path, opts.whisper_model, opts.lang):
+        return _SubResult(final=media, subtitled=False)
+
+    burn_srt = srt_path
+    srt_out = str(srt_path)
+    translated = False
+
+    if opts.translate:
+        tr_path = base.with_name(f"{base.name}.{opts.translate_to}.srt")
+        if translate_mod.translate_srt_file(
+            srt_path, tr_path,
+            model=opts.translate_model,
+            source_lang=opts.translate_from,
+            target_lang=opts.translate_to,
+            base_url=opts.translate_base_url,
+        ):
+            burn_srt, srt_out, translated = tr_path, str(tr_path), True
+
+    burned = base.with_name(f"{base.name}-sub.mp4")
+    if subtitles.burn(
+        media, burn_srt, burned,
+        font_size=opts.sub_size, margin_v=opts.sub_margin,
+    ):
+        return _SubResult(
+            final=burned, subtitled=True, srt=srt_out,
+            srt_source=str(srt_path), translated=translated,
+        )
+    return _SubResult(
+        final=media, subtitled=False, srt=srt_out,
+        srt_source=str(srt_path), translated=translated,
     )
 
 
@@ -255,9 +341,9 @@ def _detect(src: Path, opts: Options) -> list[Moment]:
     if opts.mode == "match":
         if not opts.minutes:
             raise ValueError("match modu için --minutes gerekli (örn: 23,45+2,67).")
-        return detect.detect_match(src, opts.minutes)
+        return detect.detect_match(src, opts.minutes, clip_len=opts.duration)
     return detect.detect_highlights(
-        src, opts.count, scene_threshold=opts.scene_threshold
+        src, opts.count, scene_threshold=opts.scene_threshold, clip_len=opts.duration,
     )
 
 
@@ -267,38 +353,32 @@ def _make_clip(
 ) -> ClipResult:
     base = work / f"clip-{idx:02d}"
     raw = base.with_suffix(".mp4")
-    clipper.cut_vertical(src, m.start, m.duration, raw, smart=opts.smart_crop)
+    if opts.horizontal:
+        clipper.cut_segment(src, m.start, m.duration, raw)
+    else:
+        clipper.cut_vertical(src, m.start, m.duration, raw, smart=opts.smart_crop)
 
-    final = raw
-    subtitled = False
-    srt_out: str | None = None
-    if opts.subtitles:
-        srt_path = base.with_suffix(".srt")
-        if subtitles.transcribe_to_srt(raw, srt_path, opts.whisper_model, opts.lang):
-            srt_out = str(srt_path)
-            burned = base.with_name(f"clip-{idx:02d}-sub.mp4")
-            if subtitles.burn(
-                raw, srt_path, burned,
-                font_size=opts.sub_size, margin_v=opts.sub_margin,
-            ):
-                final = burned
-                subtitled = True
+    sub = _apply_subtitles(raw, base, opts) if opts.subtitles else _SubResult(
+        final=raw, subtitled=False,
+    )
 
     title = _suggested_title(
-        opts, srt_out, source_meta, part=part,
+        opts, sub.srt, source_meta, part=part,
         fallback=f"{opts.label} #{idx} — {_mmss(m.peak)}",
     )
     return ClipResult(
         index=idx,
-        file=str(final),
+        file=str(sub.final),
         start=round(m.start, 2),
         end=round(m.end, 2),
         peak=round(m.peak, 2),
         duration=round(m.duration, 2),
         score=round(m.score, 5),
-        subtitled=subtitled,
-        srt=srt_out,
+        subtitled=sub.subtitled,
+        srt=sub.srt,
         suggested_title=title,
+        srt_source=sub.srt_source,
+        translated=sub.translated,
     )
 
 
@@ -338,8 +418,21 @@ def _write_manifest(work: Path, src: Path, opts: Options, results: list[ClipResu
         "source": str(src),
         "input": opts.source,
         "mode": opts.mode,
+        "format": "horizontal" if opts.horizontal else "vertical",
         "clip_count": len(results),
         "review_required": True,
+        "subtitle_language": (
+            opts.translate_to if any(r.translated for r in results)
+            else (opts.lang or "auto")
+        ),
+        "translation": {
+            "enabled": opts.translate,
+            "provider": "nvidia-nim",
+            "model": opts.translate_model,
+            "from": opts.translate_from,
+            "to": opts.translate_to,
+            "applied": sum(1 for r in results if r.translated),
+        },
         "clips": [asdict(r) for r in results],
     }
     (work / "manifest.json").write_text(
@@ -355,16 +448,23 @@ def _write_manifest(work: Path, src: Path, opts: Options, results: list[ClipResu
         "",
         ">>> YAYINDAN ÖNCE ZORUNLU KONTROL <<<",
         "1. Her klibi izle: gol/an tam kadrajda mı, altyazı senkron mu?",
-        "2. Telif riskini kabul ettiğini doğrula (maç görüntüsü = Content ID).",
-        "3. Spam riski: aynı anda çok benzer klip atma sınırına dikkat.",
+        "2. Altyazı çevirisi makine çevirisidir (NVIDIA/Llama): isim, skor ve "
+        "olay doğru mu, kontrol et.",
+        "3. Telif riskini kabul ettiğini doğrula (maç görüntüsü = Content ID).",
+        "4. Spam riski: aynı anda çok benzer klip atma sınırına dikkat.",
         "",
         "KLİPLER:",
     ]
     for r in results:
+        if not r.subtitled:
+            sub_state = "altyazısız"
+        elif r.translated:
+            sub_state = f"altyazılı ({opts.translate_to.upper()} çeviri)"
+        else:
+            sub_state = "altyazılı (çevrilmedi)" if opts.translate else "altyazılı"
         lines.append(
             f"  #{r.index:02d}  {Path(r.file).name}  "
             f"[{_mmss(r.start)}-{_mmss(r.end)}]  {r.duration:.1f}sn  "
-            f"{'altyazılı' if r.subtitled else 'altyazısız'}  "
-            f"-> {r.suggested_title}"
+            f"{sub_state}  -> {r.suggested_title}"
         )
     (work / "review.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

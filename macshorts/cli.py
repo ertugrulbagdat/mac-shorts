@@ -5,6 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import translate
 from .pipeline import Options, run
 
 
@@ -27,6 +28,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--vertical", action="store_true",
         help="whole modunda tüm videoyu 9:16'ya kırp (varsayılan: orijinal en-boy).",
+    )
+    p.add_argument(
+        "--horizontal", action="store_true",
+        help="highlights/match modunda klipleri 9:16'ya kırpma; orijinal yatay "
+             "(16:9) en-boyu koru.",
+    )
+    p.add_argument(
+        "--duration", type=float, default=None,
+        help="highlights/match klip süresi (sn), örn: --duration 60. "
+             "Varsayılan highlights'ta 20, match'te 16.",
     )
     p.add_argument(
         "--smart-crop", action="store_true",
@@ -76,6 +87,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--label", default="klip",
         help="Önerilen başlık öneki (örn: 'Dünya Kupası gol').",
     )
+    tr = p.add_argument_group(
+        "Altyazı çevirisi (NVIDIA NIM — varsayılan AÇIK)",
+        "Whisper SRT'sini NVIDIA'nın barındırdığı Llama modeliyle Türkçe'ye "
+        "çevirir, zaman damgalarına dokunmaz ve çevrilmiş SRT videoya gömülür. "
+        "NVIDIA_API_KEY ortam değişkeni gerekir; yoksa uyarı verilip İngilizce "
+        "altyazı gömülür.",
+    )
+    tr.add_argument(
+        "--no-translate", action="store_true",
+        help="Çeviriyi atla, whisper'ın ürettiği altyazıyı doğrudan göm.",
+    )
+    tr.add_argument(
+        "--translate-to", default="tr",
+        help="Hedef altyazı dili kodu (varsayılan tr).",
+    )
+    tr.add_argument(
+        "--translate-from", default="en",
+        help="Whisper SRT'sinin dili (varsayılan en).",
+    )
+    tr.add_argument(
+        "--translate-model", default=translate.DEFAULT_MODEL,
+        help=f"NVIDIA NIM model adı (varsayılan {translate.DEFAULT_MODEL}).",
+    )
+    tr.add_argument(
+        "--translate-base-url", default=translate.DEFAULT_BASE_URL,
+        help="OpenAI uyumlu uç nokta (varsayılan NVIDIA NIM).",
+    )
     pub = p.add_argument_group("YouTube yayını (yarı-otomatik)")
     pub.add_argument(
         "--login", action="store_true",
@@ -120,6 +158,14 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
+    if args.duration is not None and args.duration <= 0:
+        print("Hata: --duration pozitif bir saniye değeri olmalı.", file=sys.stderr)
+        return 2
+
+    if args.horizontal and args.vertical:
+        print("Hata: --horizontal ve --vertical birlikte kullanılamaz.", file=sys.stderr)
+        return 2
+
     if args.mode == "match" and not args.minutes:
         print("Hata: match modu için --minutes gerekli (örn: 23,45+2,67).",
               file=sys.stderr)
@@ -130,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         vertical=args.vertical,
         smart_crop=args.smart_crop,
+        horizontal=args.horizontal,
+        duration=args.duration,
         short_len=args.short_len,
         count=args.count,
         minutes=args.minutes,
@@ -141,6 +189,11 @@ def main(argv: list[str] | None = None) -> int:
         label=args.label,
         sub_size=args.sub_size,
         sub_margin=args.sub_margin,
+        translate=not args.no_translate,
+        translate_from=args.translate_from,
+        translate_to=args.translate_to,
+        translate_model=args.translate_model,
+        translate_base_url=args.translate_base_url,
         publish=args.publish,
         privacy=args.privacy,
         client_secret=Path(args.client_secret),

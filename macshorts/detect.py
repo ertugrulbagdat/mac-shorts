@@ -30,6 +30,20 @@ class Moment:
         return self.end - self.start
 
 
+def _window(peak: float, pre: float, post: float, total: float) -> tuple[float, float]:
+    """Zirvenin etrafında [peak-pre, peak+post] penceresi; video sınırına
+    çarparsa pencere içeri kaydırılır ki klip süresi kısalmasın."""
+    length = min(pre + post, total)
+    start = min(max(0.0, peak - pre), max(0.0, total - length))
+    return start, start + length
+
+
+def _split(clip_len: float, pre_ratio: float) -> tuple[float, float]:
+    """Toplam klip süresini zirve öncesi/sonrası paylara böl."""
+    pre = clip_len * pre_ratio
+    return pre, clip_len - pre
+
+
 def _rms_envelope(samples: np.ndarray, sr: int, win_s: float = 0.5) -> tuple[np.ndarray, float]:
     """Pencere başına RMS enerji zarfı. Returns: (zarf, pencere_süresi)."""
     win = max(1, int(sr * win_s))
@@ -73,6 +87,7 @@ def detect_highlights(
     skip_outro: float = 8.0,
     baseline_s: float = 20.0,
     scene_threshold: float = 0.35,   # geriye dönük uyum için tutulur; kullanılmaz
+    clip_len: float | None = None,
 ) -> list[Moment]:
     """Özet videodan gol/heyecan anlarını seç.
 
@@ -83,7 +98,10 @@ def detect_highlights(
 
     Ayrıca intro (ilk skip_intro sn) ve outro (son skip_outro sn) atlanır; her
     zirvenin etrafından gol + kutlama için bir pencere alınır (pre/post).
+    clip_len verilirse pre/post aynı oranla (8:12 = %40 önce) bu süreye ölçeklenir.
     """
+    if clip_len is not None:
+        pre, post = _split(clip_len, pre / (pre + post))
     duration = media_duration(src)
     samples, sr = extract_pcm(src)
     env, win_s = _rms_envelope(samples, sr, win_s=0.5)
@@ -106,8 +124,7 @@ def detect_highlights(
             continue                  # intro/outro'yu atla
         if any(abs(t - u) < min_gap for u in used):
             continue                  # önceki bir anla çakışıyor
-        start = max(0.0, t - pre)
-        end = min(duration, t + post)
+        start, end = _window(t, pre, post, duration)
         if end - start < min_len:
             continue
         chosen.append(Moment(start=start, end=end, peak=t, score=float(prominence[idx])))
@@ -142,8 +159,14 @@ def detect_match(
     search_window: float = 45.0,
     pre: float = 6.0,
     post: float = 10.0,
+    clip_len: float | None = None,
 ) -> list[Moment]:
-    """Tam maç: elle girilen dakikaların etrafında ses zirvesiyle saniyeye hizala."""
+    """Tam maç: elle girilen dakikaların etrafında ses zirvesiyle saniyeye hizala.
+
+    clip_len verilirse pre/post aynı oranla bu süreye ölçeklenir.
+    """
+    if clip_len is not None:
+        pre, post = _split(clip_len, pre / (pre + post))
     duration = media_duration(src)
     centers = parse_minutes(minutes_spec)
     if not centers:
@@ -165,7 +188,6 @@ def detect_match(
         else:
             peak = (i0 + int(np.argmax(seg))) * win_s
             score = float(np.max(seg))
-        start = max(0.0, peak - pre)
-        end = min(duration, peak + post)
+        start, end = _window(peak, pre, post, duration)
         moments.append(Moment(start=start, end=end, peak=peak, score=score))
     return moments

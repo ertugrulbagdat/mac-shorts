@@ -2,6 +2,14 @@ yt-dlp>=2024.0.0
 numpy>=1.24
 imageio-ffmpeg>=0.4.9
 faster-whisper>=1.0.0
+# Altyazı çevirisi (NVIDIA NIM, OpenAI uyumlu API) — NVIDIA_API_KEY gerekir:
+openai>=1.30
+python-dotenv>=1.0     # NVIDIA_API_KEY'i proje kökündeki .env'den okur
 # Yalnızca --publish (YouTube yükleme) için gerekli:
 google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
+# Yalnızca `python -m macshorts.social` (Instagram/TikTok yükleme) için gerekli:
+instagrapi>=2.1        # Instagram Reels (gayriresmi)
+moviepy>=2.1           # instagrapi Reels thumbnail üretimi
+tiktok-uploader>=1.0   # TikTok (Selenium + çerez)
+selenium>=4.0

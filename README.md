@@ -17,8 +17,10 @@ komut satırı aracı. Tasarım dokümanı: `office-hours` seansından üretilen
    - **match modu** (tam maç): senin elle girdiğin gol dakikalarının etrafında
      ses zirvesiyle tam saniyeye hizalar.
 3. Her anı 9:16 dikey kadraja kırpar (1080x1920).
-4. faster-whisper ile altyazı üretip videoya gömer (varsayılan açık).
-5. `manifest.json` + `review.txt` yazar — **yayından önce elle kontrol** için.
+4. faster-whisper ile altyazı (SRT) üretir (varsayılan açık).
+5. SRT metinlerini NVIDIA NIM (`meta/llama-3.1-70b-instruct`) ile Türkçe'ye
+   çevirir — zaman damgalarına dokunmadan — ve **çevrilmiş** SRT'yi videoya gömer.
+6. `manifest.json` + `review.txt` yazar — **yayından önce elle kontrol** için.
 
 ## Kurulum
 
@@ -30,6 +32,10 @@ pip install -r requirements.txt
   binary'sine otomatik düşer (ayrı kurulum gerekmez).
 - `faster-whisper` modeli ilk çalıştırmada otomatik iner. Altyazı istemiyorsan
   `--no-subtitles` ile bu adımı atla.
+- Altyazı çevirisi için `NVIDIA_API_KEY` gerekir — ortam değişkeni ya da proje
+  kökündeki `.env` dosyası (`NVIDIA_API_KEY=nvapi-...`) (bkz.
+  [Altyazı çevirisi](#altyazı-çevirisi-nvidia-nim)). Anahtar yoksa çeviri atlanır,
+  kaynak dildeki altyazı gömülür; `--no-translate` ile tamamen kapatabilirsin.
 
 ## Kullanım
 
@@ -64,6 +70,8 @@ python -m macshorts --file mac.mp4 --no-subtitles
 | `--url` / `--file` | Kaynak (biri zorunlu) |
 | `--mode` | `highlights` (özet) veya `match` (tam maç) |
 | `--smart-crop` | 9:16 kırpmada sabit merkez yerine aksiyonu (top/oyun) takip eden kayan pencere; hareket yoksa merkeze düşer |
+| `--horizontal` | highlights/match: 9:16'ya kırpma, orijinal yatay (16:9) en-boyu koru |
+| `--duration` | highlights/match klip süresi sn (varsayılan highlights 20, match 16), örn `--duration 60` |
 | `--count` | highlights modunda klip sayısı (varsayılan 5) |
 | `--minutes` | match modu gol dakikaları, örn `23,45+2,67` |
 | `--out` | Çıktı klasörü (varsayılan `output/`) |
@@ -72,6 +80,11 @@ python -m macshorts --file mac.mp4 --no-subtitles
 | `--lang` | Altyazı dili (boşsa otomatik) |
 | `--scene-threshold` | Sahne tespiti eşiği 0-1 (varsayılan 0.35) |
 | `--label` | Önerilen başlık öneki |
+| `--no-translate` | Altyazı çevirisini atla (whisper çıktısı gömülür) |
+| `--translate-to` | Hedef altyazı dili (varsayılan `tr`) |
+| `--translate-from` | Whisper SRT'sinin dili (varsayılan `en`) |
+| `--translate-model` | NVIDIA NIM modeli (varsayılan `meta/llama-3.1-70b-instruct`) |
+| `--translate-base-url` | OpenAI uyumlu uç nokta (varsayılan NVIDIA NIM) |
 
 ## YouTube yayını (yarı-otomatik)
 
@@ -111,9 +124,49 @@ python -m macshorts --url "https://instagram.com/p/..." --mode whole --vertical 
 
 Her çalıştırma `output/run-<tarih>/` altına:
 - `clip-NN.mp4` / `clip-NN-sub.mp4` — üretilen Shorts klipleri
-- `clip-NN.srt` — altyazı (yan dosya)
+- `clip-NN.srt` — whisper'ın ham altyazısı (kaynak dil, yan dosya)
+- `clip-NN.tr.srt` — videoya gömülen Türkçe çeviri (yan dosya)
 - `manifest.json` — makine-okunur kayıt
 - `review.txt` — yayın öncesi insan kontrol listesi
+
+## Altyazı çevirisi (NVIDIA NIM)
+
+Whisper kaynak dilde (genelde İngilizce) SRT üretir; `macshorts/translate.py` bu
+SRT'yi NVIDIA'nın barındırdığı **`meta/llama-3.1-70b-instruct`** modeliyle
+Türkçe'ye çevirir ve ffmpeg **çevrilmiş** SRT'yi gömer. Çağrı `openai`
+kütüphanesiyle, NVIDIA'nın OpenAI uyumlu uç noktasına yapılır
+(`https://integrate.api.nvidia.com/v1`).
+
+Kurulum:
+
+```bash
+pip install openai
+# build.nvidia.com -> API key
+setx NVIDIA_API_KEY "nvapi-..."        # Windows (yeni terminal gerekir)
+export NVIDIA_API_KEY="nvapi-..."      # macOS/Linux
+```
+
+Garantiler:
+
+- **Zaman damgalarına dokunulmaz.** Cue sayısı, sırası, indeksleri ve
+  `00:00:01,200 --> 00:00:03,400` satırları birebir korunur; yalnızca metin değişir.
+- Cue'lar bağlam için gruplanır (20'lik); model satır numaralarını karıştırırsa
+  eksik cue'lar tek tek yeniden denenir.
+- **Graceful degrade:** `openai` kurulu değilse, `NVIDIA_API_KEY` yoksa ya da API
+  hata verirse uyarı basılır ve kaynak dildeki altyazı gömülür — hat çökmez.
+  Çevrilemeyen tek tek cue'lar da orijinal metniyle kalır.
+- `manifest.json` içinde `translation` bloğu (model, diller, kaç cue çevrildi) ve
+  her klipte `translated` / `srt_source` alanları raporlanır.
+
+Tek bir SRT'yi elle çevirmek için:
+
+```bash
+python -m macshorts.translate output/run-.../clip-01.srt
+# -> clip-01.tr.srt
+```
+
+Not: makine çevirisidir — `review.txt` kontrol listesinde isim/skor/olay
+doğruluğunu gözden geçirmen istenir.
 
 ## Akıllı kırpma (aksiyon takibi)
 
